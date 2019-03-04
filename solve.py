@@ -4,68 +4,105 @@ import copy
 import utils
 import random
 
-STATIC_BOARD_SIZE = 50
-Words_Added = 0
+WORD_SCORE = 2
+FINAL_WORDS = []
+BEST_BOARD = None
+BEST_BOARD_WORDS = []
+
+# Open a build a corpus of words
+f = open('Word_List.txt')
+raw = f.read()
+tokens = nltk.word_tokenize(raw)
+print len(tokens)
 
 #Makes an empty 150x150 array of "0"
-empty_grid = [[0 for x in range(STATIC_BOARD_SIZE)] for y in range(STATIC_BOARD_SIZE)]
+empty_grid = [[0 for x in range(utils.STATIC_BOARD_SIZE)] for y in range(utils.STATIC_BOARD_SIZE)]
 
 #Letter distribution, 0 = # of A's, etc.
 MASTER_avail_letters = [13,3,3,6,18,3,4,3,12,2,2,5,3,8,11,3,2,9,6,9,6,3,3,2,3,2]
 
 #ord('a') - 97
 
-#Open a build a corpus of words
-f = open('Word_List.txt')
-raw = f.read()
-tokens = nltk.word_tokenize(raw)
-print len(tokens)
-tokens.sort(key=len, reverse=True)
-print tokens[0]
+index_dictionary = {}
 
-def findLetterinBoard(board, letter):
-    results = []
+last_index = 0
 
-    for x in range(STATIC_BOARD_SIZE-1):
-        for y in range(STATIC_BOARD_SIZE-1):
-            if board[x][y] == letter:
-                results.append([x,y])
-
-    return results
-
+#make an index of where word length are located so we can trim as we go
+for index, word in enumerate(tokens):
+    if index_dictionary.has_key(len(word)) == False:
+        index_dictionary[len(word)] = index
+        last_index = index
 
 #Given a board and a set of avail letters, what is the largest word we can place?
 
-def LargestWord (board, avail_letters, words_added) :
+def LargestWord (board, avail_letters, words_added, open_spaces) :
 
     new_board = copy.deepcopy(board)
 
     #Lets loop through all the words, in largest order
-    for current_word in tokens:
+
+    if sum(avail_letters) == 1: max = last_index
+    elif sum(avail_letters) > 25: max = 0
+    else: max = index_dictionary[sum(avail_letters)]
+
+    for current_word in tokens[max:]:
+
+        if len(current_word) > sum(avail_letters) + 1: continue
+
+        current_space = None
+        skip_index = 0
 
         #Skip early words which will suck up our vowels
-
-        if sum(avail_letters) > 40:
-            if utils.scoreWord(current_word) < 1.05: continue
-        elif sum(avail_letters) > 20:
-            if utils.scoreWord(current_word) < 1.25: continue
+        if sum(avail_letters) > 15:
+            if utils.scoreWord(current_word, avail_letters) < WORD_SCORE: continue
 
         #Do we have the letters for it? Store the current state and lets try
         new_avail_letter = copy.deepcopy(avail_letters)
 
-        count = Counter(current_word)
-        for letter in count:
+        for index, letter in enumerate(current_word):
             num = ord(letter) - 97
-            if new_avail_letter[num] >= count[letter]:
+            if new_avail_letter[num] >= 1:
                 #we have the letters!
-                new_avail_letter[num] = new_avail_letter[num] - count[letter]
-            else:
-                #we don't so lets reset and try again
-                new_avail_letter = copy.deepcopy(avail_letters)
-                break
+                new_avail_letter[num] -= 1
+                #print "Removed " + letter
+            else: #we don't have this letter but can we get it off the board?
 
-        #if we have the letters, lets check the fit:
-        if (new_avail_letter != avail_letters):
+                #did we already use an existing tile?
+                if current_space != None:
+                    new_avail_letter = copy.deepcopy(avail_letters)
+                    current_space = None
+                    break
+
+                for space in open_spaces:
+                    if space[0] == letter:
+                        current_space = space
+                        skip_index = index
+                        break
+
+                if current_space == None:
+                    #we searched the letters and open spaces, found nothing
+                    new_avail_letter = copy.deepcopy(avail_letters)
+                    break
+
+        #we have the letters, but did we find a space? If not, could we still find one? Skip this if this is our first word
+        if current_space == None and words_added > 0 and new_avail_letter != avail_letters:
+            #for every letter in our word, check all our open spaces for the same letter
+            for index, letter in enumerate(current_word):
+                for space in open_spaces:
+                    if space[0] == letter:
+
+                        #We found an open space!
+                        current_space = space
+                        #we need to put the tile back!
+                        new_avail_letter[ord(letter) - 97] += 1
+                        #save our index
+                        skip_index = index
+
+                        break
+                if current_space != None: break
+
+        #At this point we either found a space or this is the first word or we need to pick a new word
+        if (current_space != None or words_added == 0):
 
             #Is this the first word?
             if (words_added == 0):
@@ -80,81 +117,56 @@ def LargestWord (board, avail_letters, words_added) :
             else:
                 length = len(current_word)
 
-                #for each letter in the current_word, find potential starting spots and check vertical and horizontal placement
+                #we need to split the word on the chosen letter
+                pre_word = current_word[:skip_index]
+                post_word = current_word[skip_index + 1:]
 
-                #Randomize the words so we start in different areas
-                shuffled_current_word = list(current_word)
-                random.shuffle(shuffled_current_word)
+                #Do we have the space for it?
+                if len(pre_word) < current_space[3] and len(post_word) < current_space[4]:
 
-                for letter in shuffled_current_word:
-                    locations = findLetterinBoard(board, letter)
-                    index = current_word.find(letter)
-                    for possible_location in locations:
+                    x = current_space[1]
+                    y = current_space[2]
 
-                        x = possible_location[0]
-                        y = possible_location[1]
+                    #Yes, we place the word on the board. Do the "pre" in reverse
+                    for index, letter_to_place in enumerate(reversed(pre_word)):
+                        if current_space[5] == utils.WORD_VERTICAL:
+                            new_board[x - index - 1][y] = letter_to_place
+                        else:
+                            new_board[x][y - index - 1] = letter_to_place
 
-                        pre_length = index
-                        post_length = length - index
-
-                        new_board = copy.deepcopy(board)
-
-                        #Check Vertical
-                        for subtract in range(pre_length):
-                            if board[x - subtract][y] == 0 or board[x - subtract][y] == current_word[index-subtract]:
-                                new_board[x - subtract][y] = current_word[index-subtract]
-                            else:
-                                #wipe any progress
-                                new_board = copy.deepcopy(board)
-                                break
-
-                        for add in range(post_length):
-                            if board[x + add][y] == 0 or board[x + add][y] == current_word[index + add]:
-                                new_board[x + add][y] = current_word[index + add - 1]
-                            else:
-                                # wipe any progress
-                                new_board = copy.deepcopy(board)
-                                break
-
-                        #If we couldn't find vertical, we can check horizontal
-                        if (new_board == board):
-
-                            for subtract in range(pre_length):
-                                if board[x][y - subtract] == 0 or board[x][y - subtract] == current_word[index - subtract]:
-                                    new_board[x][y - subtract] = current_word[index - subtract]
-                                else:
-                                    # wipe any progress
-                                    new_board = copy.deepcopy(board)
-                                    break
-
-                            for add in range(post_length):
-                                if board[x][y + add] == 0 or board[x][y + add] == current_word[index + add]:
-                                    new_board[x][y + add] = current_word[index + add]
-                                else:
-                                    # wipe any progress
-                                    new_board = copy.deepcopy(board)
-                                    break
-
-                        #Did we write a new board?
-                        if (new_board != board): break
-                    # Did we write a new board?
-                    if (new_board != board): break
+                    #Yes, we place the word on the board. Do the post
+                    for index, letter_to_place in enumerate(post_word):
+                        if current_space[5] == utils.WORD_VERTICAL:
+                            new_board[x + index + 1][y] = letter_to_place
+                        else:
+                            new_board[x][y + index + 1] = letter_to_place
 
         #Were we able to place this word?
         if (new_board != board):
             if sum(new_avail_letter) == 0:
                 #we're done! We have full board. Return this board and wrap it up
+                FINAL_WORDS.append(current_word)
                 return new_board
             else:
                 #we have letters left to go, we must go deeper
                 words_added += 1
-                print "New Word Added!: " + current_word + "\t Letters Remaining: " + str(sum(new_avail_letter))
-                if(sum(new_avail_letter) < 10):
-                    utils.print_letters(new_avail_letter)
-                recursive = LargestWord(new_board, new_avail_letter, words_added)
+
+
+                #if(sum(new_avail_letter) < 15):
+                #    utils.print_letters(new_avail_letter)
+
+  #              if (sum(new_avail_letter) < 25):
+  #                  for line in new_board: print line
+                #print "New Word Added!: " + current_word + "\t Letters Remaining: " + str(sum(new_avail_letter)) + "\t Score:" + str(utils.scoreWord(current_word, avail_letters))
+                FINAL_WORDS.append(current_word)
+                recursive = LargestWord(new_board, new_avail_letter, words_added, utils.returnBoardOptions(new_board))
+
                 if recursive == False:
                     #this path didn't work, we need to try something else
+                    #print "Word Failed: " + current_word
                     new_board = copy.deepcopy(board)
+                    words_added -= 1
+                    FINAL_WORDS.pop()
                 else:
                     return recursive
 
@@ -162,11 +174,50 @@ def LargestWord (board, avail_letters, words_added) :
     return False
 
 def main():
-    final_board = LargestWord(empty_grid, MASTER_avail_letters, 0)
 
-    for x in final_board:
-        for y in final_board:
-            print y
+    try:
+        while True:
+            # Shuffle, then sort the list by word length
+
+            global FINAL_WORDS
+            global BEST_BOARD
+            global BEST_BOARD_WORDS
+
+            random.shuffle(tokens)
+            tokens.sort(key=len, reverse=True)
+            final_board = LargestWord(empty_grid, MASTER_avail_letters, 0, [])
+
+            print "Found a valid board. Words: " + str(len(FINAL_WORDS))
+
+            if len(FINAL_WORDS) < len(BEST_BOARD_WORDS) or BEST_BOARD_WORDS == []:
+                #WE FOUND A NEW WINNER!!!
+                print "New Best!"
+                BEST_BOARD_WORDS = copy.deepcopy(FINAL_WORDS)
+                BEST_BOARD = copy.deepcopy(final_board)
+
+            #Wipe everything and go again
+            FINAL_WORDS = []
+
+
+    except KeyboardInterrupt:
+        pass
+        if BEST_BOARD == None:
+            print "We ended before anything was found!"
+        else:
+            for x in BEST_BOARD:
+                row = ""
+                for y in x:
+                    if y == 0:
+                        row = row + " "
+                    else:
+                        row = row + str(y)
+                print row
+
+            print "Final Count: " + str(len(BEST_BOARD_WORDS))
+            print "Final Word List: "
+            print BEST_BOARD_WORDS
+
+
 
 
 if __name__ == "__main__":
